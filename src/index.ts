@@ -15,7 +15,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 // CORS para permitir chamadas do frontend
 app.use('/*', cors({
     origin: ['https://borapassageiro.bkaiser.com.br', 'https://borapassageiro.com', 'https://www.borapassageiro.com', 'http://localhost:5173', 'http://localhost:3000'],
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
 }));
 
