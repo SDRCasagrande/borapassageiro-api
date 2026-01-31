@@ -30,3 +30,23 @@ model AnalyticsEvent {
   @@index([date])
   @@index([utm_source])
 }
+
+model IntegrationConfig {
+  id        String   @id @default(uuid())
+  key       String   @unique // e.g., "facebook", "google", "tiktok"
+  data      Json     // Stores tokens, pixels, etc.
+  updatedAt DateTime @updatedAt
+}
+
+model SiteContent {
+  id        String   @id @default(uuid())
+  section   String   // "gallery", "promo"
+  type      String   // "youtube", "image", "text"
+  title     String?
+  url       String?  // Video URL or Image URL
+  content   String?  // Description or promo text
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

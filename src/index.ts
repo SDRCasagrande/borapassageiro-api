@@ -3,6 +3,9 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { PrismaClient } from '@prisma/client';
 import { sign, verify } from 'hono/jwt';
+import { FacebookService } from './services/FacebookService';
+import { GoogleService } from './services/GoogleService';
+import { TikTokService } from './services/TikTokService';
 
 const prisma = new PrismaClient();
 const app = new Hono();
@@ -35,6 +38,89 @@ app.post('/api/auth/login', async (c) => {
     }
 });
 
+// --- CONTENT MANAGEMENT (CMS) ---
+
+// Get Public Content (for Landing Page)
+app.get('/api/content/public', async (c) => {
+    const content = await prisma.siteContent.findMany({
+        where: { isActive: true },
+        orderBy: { order: 'asc' }
+    });
+    return c.json(content);
+});
+
+// Get All Content (Admin)
+app.get('/api/content', authMiddleware, async (c) => {
+    const content = await prisma.siteContent.findMany({
+        orderBy: { order: 'asc' }
+    });
+    return c.json(content);
+});
+
+// Create/Update Content
+app.post('/api/content', authMiddleware, async (c) => {
+    const body = await c.req.json();
+    const { id, section, type, title, url, content, isActive, order } = body;
+
+    // Standardize YouTube URLs if needed
+    let finalUrl = url;
+    if (type === 'youtube' && url) {
+        // Extract ID from various YT formats if user pastes full link
+        const vidId = url.match(/(?:youtu\.be\/|youtube\.com\/.*v=|embed\/)([^&?]+)/)?.[1];
+        if (vidId) finalUrl = vidId; // Store just the ID
+    }
+
+    if (id) {
+        // Update
+        const item = await prisma.siteContent.update({
+            where: { id },
+            data: { section, type, title, url: finalUrl, content, isActive, order: Number(order) }
+        });
+        return c.json(item);
+    } else {
+        // Create
+        const item = await prisma.siteContent.create({
+            data: { section, type, title, url: finalUrl, content, isActive, order: Number(order) }
+        });
+        return c.json(item);
+    }
+});
+
+// Delete Content
+app.delete('/api/content/:id', authMiddleware, async (c) => {
+    const id = c.req.param('id');
+    await prisma.siteContent.delete({ where: { id } });
+    return c.json({ success: true });
+});
+
+// --- INTEGRATIONS ---
+app.get('/api/integrations', authMiddleware, async (c) => {
+    const configs = await prisma.integrationConfig.findMany();
+    // Convert to simple object { facebook: {...}, google: {...} }
+    const result: any = {};
+    configs.forEach(conf => {
+        result[conf.key] = conf.data;
+    });
+    return c.json(result);
+});
+
+// Save Integration
+app.post('/api/integrations', authMiddleware, async (c) => {
+    const { key, data } = await c.req.json();
+
+    if (!['facebook', 'google', 'tiktok'].includes(key)) {
+        return c.json({ error: 'Invalid key' }, 400);
+    }
+
+    const config = await prisma.integrationConfig.upsert({
+        where: { key },
+        update: { data },
+        create: { key, data }
+    });
+
+    return c.json(config);
+});
+
 // Auth Middleware
 async function authMiddleware(c: any, next: any) {
     const authHeader = c.req.header('Authorization');
@@ -42,7 +128,7 @@ async function authMiddleware(c: any, next: any) {
 
     const token = authHeader.split(' ')[1];
     try {
-        await verify(token, JWT_SECRET);
+        await verify(token, JWT_SECRET, 'HS256');
         await next();
     } catch (e) {
         return c.json({ error: 'Invalid token' }, 401);
@@ -69,11 +155,12 @@ app.post('/api/track', async (c) => {
         let city = null;
         let region = null;
         let country = null;
+        let ip = '127.0.0.1';
 
         try {
             // Get IP (x-forwarded-for handling for Coolify/Nginx)
             const forwarded = c.req.header('x-forwarded-for');
-            const ip = forwarded ? forwarded.split(',')[0] : c.req.header('cf-connecting-ip') || '127.0.0.1';
+            ip = forwarded ? forwarded.split(',')[0] : c.req.header('cf-connecting-ip') || '127.0.0.1';
 
             // Skip local/private IPs to avoid wasting API calls
             if (ip && ip.length > 7 && !ip.startsWith('127.') && !ip.startsWith('192.168.')) {
@@ -90,6 +177,59 @@ app.post('/api/track', async (c) => {
             console.error('Geo lookup failed:', geoError);
         }
 
+        // Fetch Integration Configs
+        const configs = await prisma.integrationConfig.findMany();
+        const fbConfig = configs.find(c => c.key === 'facebook')?.data as any;
+        const gaConfig = configs.find(c => c.key === 'google')?.data as any;
+        const ttConfig = configs.find(c => c.key === 'tiktok')?.data as any;
+
+        // Fire Ad Tech Events (Async)
+        const fbc = c.req.header('fbc') || undefined;
+        const fbp = c.req.header('fbp') || undefined;
+        const ttclid = c.req.header('ttclid') || undefined;
+        const clientId = c.req.header('x-ga-client-id') || undefined;
+
+        // Map events
+        if (type !== 'visit') {
+            const eventMap: any = {
+                'click_whatsapp': 'Lead',
+                'click_playstore': 'ViewContent',
+                'click_appstore': 'ViewContent'
+            };
+            const fbEvent = eventMap[type] || 'CustomEvent';
+            const ttEvent = type === 'click_whatsapp' ? 'ClickButton' : 'ViewContent'; // Simple mapping for TikTok
+
+            // Facebook CAPI
+            if (fbConfig?.accessToken && fbConfig?.pixelId) {
+                FacebookService.sendEvent(fbEvent, {
+                    content_name: type,
+                    city,
+                    region,
+                    country
+                }, { ip, userAgent: userAgent || '', fbc, fbp }, fbConfig);
+            }
+
+            // Google GA4
+            if (gaConfig?.measurementId && gaConfig?.apiSecret) {
+                GoogleService.sendEvent(type, {
+                    client_id: clientId,
+                    city,
+                    region,
+                    source: utm_source,
+                    medium: utm_medium,
+                    campaign: utm_campaign
+                }, gaConfig);
+            }
+
+            // TikTok Events API
+            if (ttConfig?.accessToken && ttConfig?.pixelId) {
+                TikTokService.sendEvent(ttEvent, {
+                    content_name: type,
+                    region
+                }, { ip, userAgent: userAgent || '', ttclid }, ttConfig);
+            }
+        }
+
         await prisma.analyticsEvent.create({
             data: {
                 type,
@@ -104,7 +244,7 @@ app.post('/api/track', async (c) => {
             },
         });
 
-        return c.json({ success: true });
+        return c.json({ success: true, city });
     } catch (error) {
         console.error('Track error:', error);
         return c.json({ error: 'Internal server error' }, 500);
