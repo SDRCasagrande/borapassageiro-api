@@ -13,8 +13,20 @@ model AnalyticsEvent {
   date      DateTime @default(now())
   userAgent String?
   referer   String?
+  
+  // Geolocation
+  city      String?
+  region    String?
+  country   String?
+
+  // Marketing (Paid Traffic)
+  utm_source   String?
+  utm_medium   String?
+  utm_campaign String?
+
   createdAt DateTime @default(now())
 
   @@index([type])
   @@index([date])
+  @@index([utm_source])
 }
