@@ -1,7 +1,6 @@
 {
     "name": "bora-passageiro-api",
     "version": "1.0.0",
-    "type": "module",
     "scripts": {
         "dev": "tsx watch src/index.ts",
         "build": "npx prisma generate && tsc",
