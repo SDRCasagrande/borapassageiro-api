@@ -25,7 +25,7 @@ export const FacebookService = {
             const request = new EventRequest(config.accessToken, config.pixelId).setEvents([serverEvent]);
 
             // Fire and forget - don't block the main thread
-            request.execute().catch(err => console.error('FB CAPI Error:', err));
+            request.execute().catch((err: unknown) => console.error('FB CAPI Error:', err));
         } catch (error) {
             console.error('FB Service Error:', error);
         }
